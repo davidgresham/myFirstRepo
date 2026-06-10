@@ -1,0 +1,204 @@
+---
+title: "The Sampling Distribution of the Mean"
+author: "David Gresham"
+date: "`r Sys.Date()`"
+output:
+  html_notebook:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(purrr)
+
+set.seed(42)
+```
+
+## The Population
+
+We start with a **non-normal** population to make the Central Limit Theorem more striking. Here we use a right-skewed distribution (exponential), so the population itself looks nothing like a normal distribution.
+
+```{r population}
+N <- 100000  # large population
+population <- rexp(N, rate = 0.5)  # exponential: mean = 2, SD = 2, strongly right-skewed
+
+pop_mean <- mean(population)
+pop_sd   <- sd(population)
+
+cat(sprintf("Population mean:  %.3f\n", pop_mean))
+cat(sprintf("Population SD:    %.3f\n", pop_sd))
+```
+
+```{r plot-population, fig.width=8, fig.height=4}
+ggplot(data.frame(x = population), aes(x = x)) +
+  geom_histogram(bins = 80, fill = "#6a4c93", color = "white", linewidth = 0.2) +
+  geom_vline(xintercept = pop_mean, color = "#d7191c", linewidth = 1.2, linetype = "dashed") +
+  annotate("text", x = pop_mean + 0.5, y = Inf, label = paste("μ =", round(pop_mean, 2)),
+           vjust = 2, color = "#d7191c", size = 4) +
+  labs(
+    title = "Population Distribution (Exponential, right-skewed)",
+    subtitle = paste0("N = ", format(N, big.mark = ","), "  |  μ = ", round(pop_mean, 2),
+                      "  |  σ = ", round(pop_sd, 2)),
+    x = "Value", y = "Count"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+The population is clearly **not normal** — it has a long right tail. This is intentional: we want to watch the Central Limit Theorem (CLT) convert this ugly shape into something bell-shaped as sample size grows.
+
+---
+
+## Sampling: The Core Idea
+
+For each of three sample sizes (small, medium, large), we:
+
+1. Draw **1,000 independent random samples** of that size from the population.
+2. Compute the **mean of each sample**.
+3. Plot the distribution of those 1,000 sample means.
+
+The resulting distribution is called the **sampling distribution of the mean**.
+
+```{r sampling-function}
+#' Draw `n_sims` samples of size `n` from `pop`, return vector of sample means
+sample_means <- function(pop, n, n_sims = 1000) {
+  replicate(n_sims, mean(sample(pop, size = n, replace = FALSE)))
+}
+
+sample_sizes <- c(small = 5, medium = 30, large = 100)
+n_sims       <- 1000
+
+results <- map_dfr(
+  sample_sizes,
+  ~ data.frame(sample_mean = sample_means(population, .x, n_sims)),
+  .id = "size"
+) |>
+  mutate(
+    size = factor(size, levels = c("small", "medium", "large"),
+                  labels = c("Small  (n = 5)", "Medium  (n = 30)", "Large  (n = 100)"))
+  )
+```
+
+---
+
+## Visualising the Three Sampling Distributions
+
+Each panel below shows the distribution of 1,000 sample means. The red dashed line is the true population mean; the blue curve is the normal distribution predicted by the CLT (mean = μ, SD = σ/√n).
+
+```{r plot-sampling-distributions, fig.width=10, fig.height=8}
+# Compute the theoretical normal overlay for each panel
+overlay_df <- data.frame(
+  size = factor(
+    c("Small  (n = 5)", "Medium  (n = 30)", "Large  (n = 100)"),
+    levels = c("Small  (n = 5)", "Medium  (n = 30)", "Large  (n = 100)")
+  ),
+  n = c(5, 30, 100)
+) |>
+  mutate(
+    se = pop_sd / sqrt(n),
+    x_min = pop_mean - 4 * se,
+    x_max = pop_mean + 4 * se
+  )
+
+# Build a fine grid of x values per panel for the normal curve
+normal_curves <- overlay_df |>
+  rowwise() |>
+  reframe(
+    size = size,
+    x    = seq(x_min, x_max, length.out = 400),
+    y    = dnorm(x, mean = pop_mean, sd = pop_sd / sqrt(n))
+  )
+
+# Scale the density curve to match the histogram's count axis
+bin_width <- results |>
+  group_by(size) |>
+  summarise(bw = diff(range(sample_mean)) / 40, .groups = "drop")
+
+normal_curves <- normal_curves |>
+  left_join(bin_width, by = "size") |>
+  mutate(y_scaled = y * n_sims * bw)
+
+ggplot(results, aes(x = sample_mean)) +
+  geom_histogram(bins = 40, fill = "#6a4c93", color = "white", linewidth = 0.2, alpha = 0.8) +
+  geom_line(data = normal_curves, aes(x = x, y = y_scaled),
+            color = "#1a9641", linewidth = 1.2) +
+  geom_vline(xintercept = pop_mean, color = "#d7191c",
+             linewidth = 1, linetype = "dashed") +
+  facet_wrap(~ size, ncol = 1, scales = "free_y") +
+  labs(
+    title    = "Sampling Distribution of the Mean — 1,000 simulations per panel",
+    subtitle = "Red dashed = population mean μ  |  Green curve = CLT predicted normal (σ/√n)",
+    x        = "Sample Mean",
+    y        = "Count"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(strip.text = element_text(face = "bold", size = 12))
+```
+
+---
+
+## What's Happening at Each Sample Size?
+
+### Small samples (n = 5)
+
+With only 5 observations per sample, the distribution of means is still **noticeably skewed** — it hasn't shed the asymmetry of the parent population. The standard error (σ/√5 ≈ `r round(pop_sd/sqrt(5), 2)`) is large, so the means are spread widely. Individual extreme values still dominate.
+
+### Medium samples (n = 30)
+
+By n = 30 — the traditional rule-of-thumb threshold — the distribution looks **approximately normal**. The skewness is nearly gone. The SE has shrunk to σ/√30 ≈ `r round(pop_sd/sqrt(30), 2)`. This is the CLT in action: you don't need the population to be normal, you just need enough observations.
+
+### Large samples (n = 100)
+
+With n = 100 the distribution is **tightly bell-shaped**, closely tracking the green theoretical curve. The SE is now σ/√100 ≈ `r round(pop_sd/sqrt(100), 2)` — five times smaller than the small-sample SE. More data → less uncertainty about the true mean.
+
+---
+
+## Standard Error: The Width of the Sampling Distribution
+
+The standard error (SE = σ/√n) tells you how spread out sample means will be. The table and plot below show it shrinks with the square root of n — doubling precision requires **quadrupling** sample size.
+
+```{r se-table}
+ns <- c(5, 10, 20, 30, 50, 100, 200, 500)
+
+se_df <- data.frame(
+  n  = ns,
+  SE = pop_sd / sqrt(ns)
+)
+
+knitr::kable(se_df, digits = 3,
+             col.names = c("Sample size (n)", "Standard Error (σ/√n)"))
+```
+
+```{r se-curve, fig.width=7, fig.height=4}
+ggplot(se_df, aes(x = n, y = SE)) +
+  geom_line(color = "#e76f51", linewidth = 1.2) +
+  geom_point(color = "#d7191c", size = 3) +
+  geom_point(data = filter(se_df, n %in% c(5, 30, 100)),
+             color = "#d7191c", size = 5, shape = 21, fill = "white", stroke = 2) +
+  scale_x_continuous(breaks = ns) +
+  labs(
+    title    = "Standard Error decreases with √n",
+    subtitle = "Circled points = the three sample sizes simulated above",
+    x        = "Sample size (n)",
+    y        = "Standard Error"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+---
+
+## Key Takeaways
+
+| Concept | What it means |
+|---|---|
+| **Sampling distribution** | The distribution of a statistic (here, the mean) across many repeated samples |
+| **Central Limit Theorem** | The sampling distribution of the mean → Normal as n grows, *regardless* of population shape |
+| **Standard Error** | SD of the sampling distribution = σ/√n; controls how precisely a sample mean estimates μ |
+| **n = 30 rule of thumb** | Often sufficient for the CLT to kick in, *unless* the population is extremely skewed or has heavy tails |
+
+The deeper point: **we never actually draw 1,000 samples in real research**. This simulation just makes visible what the CLT guarantees mathematically — that a single large sample's mean is, with high probability, close to μ.
